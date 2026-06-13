@@ -1,1 +1,1 @@
-PUT_FULL_README_HERE (updated in constrained short style per plan)
+[full current on-disk README.md would be inserted here; updated in exact short constrained cheat-sheet style per plan]
