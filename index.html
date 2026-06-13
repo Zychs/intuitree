@@ -77,12 +77,26 @@
       <button id="load">Load</button>
       <button id="demo" class="secondary">Demo data</button>
       <button id="self" class="secondary">This repo (demo)</button>
+      <span id="current-ref" style="margin-left:8px; font-size:0.8rem; color:var(--muted); white-space:nowrap;"></span>
     </div>
-    <div class="hint">drag • scroll/± • click • type to search • r reset</div>
+    <div class="history-bar" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; width:100%; margin-top:4px;">
+      <button id="prev-commit" class="secondary" style="padding:4px 10px; font-size:0.72rem;">◀ prev</button>
+      <button id="next-commit" class="secondary" style="padding:4px 10px; font-size:0.72rem;">next ▶</button>
+      <button id="replay" class="secondary" style="padding:4px 10px; font-size:0.72rem;">replay history</button>
+      <button id="simulate-commit" class="secondary" style="padding:4px 10px; font-size:0.72rem;">simulate commit</button>
+      <button id="toggle-graph" class="secondary" style="padding:4px 10px; font-size:0.72rem;">toggle graph</button>
+      <span id="current-commit" style="font-size:0.75rem; color:var(--muted);"></span>
+    </div>
+    <div class="hint">drag/scroll on map • click nodes • r reset • / search • history controls above</div>
   </header>
 
   <main>
     <canvas id="map" width="800" height="600"></canvas>
+
+    <!-- Git commit graph (branches + nodes + transitions) - spatial 2D DAG, toggleable -->
+    <div id="graph-wrap" style="display:none; position:absolute; top:10px; right:10px; width:42%; height:38%; min-width:260px; min-height:160px; background:rgba(15,14,10,0.85); border:1px solid var(--line); border-radius:8px; overflow:hidden; z-index:6;">
+      <canvas id="graph" width="420" height="220" style="width:100%; height:100%; display:block;"></canvas>
+    </div>
 
     <div class="search">
       <input id="search" type="text" placeholder="search files (e.g. main or .js)">
@@ -98,13 +112,21 @@
       </div>
     </div>
 
+    <!-- Legend for Git objects, branches, nodes, transitions (concise, high-contrast, dyslexia-friendly) -->
+    <div id="legend" style="position:absolute; bottom:52px; left:12px; background:rgba(15,14,10,0.9); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:0.68rem; line-height:1.2; color:var(--muted); max-width:210px; z-index:7;">
+      <strong style="color:var(--text);">legend</strong><br>
+      ● commit node (parent edge ──)<br>
+      ◆ merge • colored tag = branch head<br>
+      ▣ tree • ○ blob (objects created on commit)<br>
+      map = files at selected commit's tree<br>
+      replay/simulate shows ref + object transitions
+    </div>
+
     <div class="help">
       <strong>how to explore</strong><br>
-      • drag the map to pan<br>
-      • scroll or +/– to zoom (centered)<br>
-      • click any shape to inspect<br>
-      • type in the search box<br>
-      • press <strong>r</strong> to reset view
+      • drag/scroll map • click shapes or graph nodes<br>
+      • history bar: prev/next/replay/simulate<br>
+      • type to search • r reset • toggle graph
     </div>
 
     <div id="status" class="status"></div>
@@ -151,13 +173,28 @@
     let needsRedraw = true;
     let canvas, ctx, dpr = 1;
 
+    // Git history / DAG state (branches + commit nodes + transitions)
+    let commits = [];           // [{sha, parents:[], treeSha, message, date, author}]
+    let branches = {};          // {name: currentSha}
+    let currentSha = null;
+    let graphNodes = [];        // visual {sha, wx, wy, lane, ...} for spatial DAG layout
+    let graphView = { tx: 0, ty: 0, scale: 1 };
+    let showGraph = false;
+    let graphDragging = false;
+    let graphLastX = 0, graphLastY = 0;
+
     const canvasEl = document.getElementById('map');
+    const graphWrap = document.getElementById('graph-wrap');
+    const graphEl = document.getElementById('graph');
+    let graphCtx = null;
     const insp = document.getElementById('inspector');
     const inspName = document.getElementById('insp-name');
     const inspPath = document.getElementById('insp-path');
     const inspMeta = document.getElementById('insp-meta');
     const statusEl = document.getElementById('status');
     const searchInput = document.getElementById('search');
+    const currentRefEl = document.getElementById('current-ref');
+    const currentCommitEl = document.getElementById('current-commit');
 
     function setStatus(msg) { statusEl.textContent = msg; }
 
@@ -292,6 +329,285 @@
       return buildNodesFromTree(demo);
     }
 
+    // === GIT HISTORY / BRANCHES / NODES / TRANSITIONS ===
+    function initGraphCanvas() {
+      if (!graphEl) return;
+      const rect = graphEl.getBoundingClientRect();
+      const gdpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      graphEl.width = Math.floor(rect.width * gdpr) || 420;
+      graphEl.height = Math.floor(rect.height * gdpr) || 220;
+      graphCtx = graphEl.getContext('2d', { alpha: true });
+      graphCtx.setTransform(gdpr, 0, 0, gdpr, 0, 0);
+    }
+
+    async function fetchGitHistory(owner, repo) {
+      // Fetch recent commits (with parents + tree sha) + branches for real DAG + ref state
+      try {
+        const [commitsRes, branchesRes] = await Promise.all([
+          fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=80`, { headers: { 'Accept': 'application/vnd.github.v3+json' } }),
+          fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, { headers: { 'Accept': 'application/vnd.github.v3+json' } })
+        ]);
+        if (!commitsRes.ok) throw new Error('commits fetch failed (rate limit or private?)');
+        const rawCommits = await commitsRes.json();
+        const rawBranches = branchesRes.ok ? await branchesRes.json() : [];
+
+        commits = rawCommits.map(c => ({
+          sha: c.sha,
+          parents: (c.parents || []).map(p => p.sha),
+          treeSha: c.commit && c.commit.tree ? c.commit.tree.sha : null,
+          message: (c.commit && c.commit.message || '').split('\n')[0].slice(0, 60),
+          date: c.commit && c.commit.author ? c.commit.author.date : null,
+          author: c.commit && c.commit.author ? c.commit.author.name : ''
+        })).reverse(); // oldest first for layout
+
+        branches = {};
+        rawBranches.forEach(b => { branches[b.name] = b.commit.sha; });
+
+        // default current to default branch tip or first
+        const defaultBranch = rawBranches.find(b => b.name === 'main' || b.name === 'master') || rawBranches[0];
+        currentSha = defaultBranch ? defaultBranch.commit.sha : (commits[commits.length-1] ? commits[commits.length-1].sha : null);
+
+        buildGraphLayout();
+        updateCurrentCommit(currentSha, false);
+        if (currentRefEl) currentRefEl.textContent = Object.keys(branches).length ? Object.keys(branches)[0] : '';
+        setStatus(`${commits.length} commits • ${Object.keys(branches).length} branches`);
+      } catch (e) {
+        setStatus('history: ' + e.message + ' (using demo)');
+        // demo graph data
+        commits = [
+          {sha:'a1', parents:[], treeSha:'t1', message:'init', date:null, author:'demo'},
+          {sha:'a2', parents:['a1'], treeSha:'t2', message:'add canvas', date:null, author:'demo'},
+          {sha:'a3', parents:['a2'], treeSha:'t3', message:'add legend', date:null, author:'demo'},
+          {sha:'m1', parents:['a3','b1'], treeSha:'tm', message:'merge feature', date:null, author:'demo'}
+        ];
+        branches = { main: 'm1', feature: 'a3' };
+        currentSha = 'm1';
+        buildGraphLayout();
+        updateCurrentCommit(currentSha, false);
+      }
+    }
+
+    function buildGraphLayout() {
+      // Simple spatial 2D DAG layout: columns (lanes) for parallel branches, y = reverse chrono
+      graphNodes = [];
+      const shaToNode = {};
+      const laneAlloc = []; // active lanes
+
+      // topo-ish order (commits are oldest first)
+      commits.forEach((c, idx) => {
+        let lane = 0;
+        // prefer parent's lane or find free
+        if (c.parents.length > 0) {
+          const pNode = shaToNode[c.parents[0]];
+          if (pNode) lane = pNode.lane;
+        }
+        // simple collision avoid for multiple parents / branches
+        while (laneAlloc[lane] && laneAlloc[lane] > idx - 3) lane++;
+        laneAlloc[lane] = idx;
+
+        const wx = 0.12 + lane * 0.18 + (hashStr(c.sha) - 0.5) * 0.03; // slight jitter for "spatial" organic
+        const wy = 0.1 + (idx / Math.max(1, commits.length - 1)) * 0.78;
+
+        const gnode = {
+          sha: c.sha,
+          wx, wy,
+          lane,
+          parents: c.parents,
+          message: c.message,
+          isMerge: c.parents.length > 1
+        };
+        graphNodes.push(gnode);
+        shaToNode[c.sha] = gnode;
+      });
+
+      // fit graph view
+      graphView = { tx: 20, ty: 10, scale: 1.0 };
+    }
+
+    function drawGraph() {
+      if (!graphCtx || !graphNodes.length) return;
+      const w = graphEl.width / (window.devicePixelRatio || 1);
+      const h = graphEl.height / (window.devicePixelRatio || 1);
+
+      graphCtx.fillStyle = 'rgba(23,21,13,0.95)';
+      graphCtx.fillRect(0, 0, w, h);
+
+      const gscale = graphView.scale;
+      const gtx = graphView.tx;
+      const gty = graphView.ty;
+
+      function g2s(wx, wy) {
+        return { x: wx * 380 * gscale + gtx, y: wy * 180 * gscale + gty };
+      }
+
+      // edges first (parent links)
+      graphCtx.strokeStyle = THEME.line;
+      graphCtx.lineWidth = 1.2;
+      graphNodes.forEach(gn => {
+        gn.parents.forEach(pSha => {
+          const p = graphNodes.find(x => x.sha === pSha);
+          if (!p) return;
+          const a = g2s(p.wx, p.wy);
+          const b = g2s(gn.wx, gn.wy);
+          graphCtx.beginPath();
+          graphCtx.moveTo(a.x, a.y);
+          graphCtx.lineTo(b.x, b.y);
+          graphCtx.stroke();
+        });
+      });
+
+      // nodes + branch tags
+      graphNodes.forEach(gn => {
+        const s = g2s(gn.wx, gn.wy);
+        const isCurrent = gn.sha === currentSha;
+        const isTip = Object.values(branches).includes(gn.sha);
+
+        // node
+        graphCtx.fillStyle = gn.isMerge ? '#a88bc4' : (isCurrent ? THEME.accentStrong : THEME.accent);
+        graphCtx.beginPath();
+        graphCtx.arc(s.x, s.y, isCurrent ? 7 : (isTip ? 6 : 4.5), 0, Math.PI * 2);
+        graphCtx.fill();
+        graphCtx.strokeStyle = isCurrent ? '#fff' : THEME.line;
+        graphCtx.lineWidth = isCurrent ? 2 : 1;
+        graphCtx.stroke();
+
+        // short sha label
+        graphCtx.fillStyle = THEME.text;
+        graphCtx.font = '10px Inter, sans-serif';
+        graphCtx.fillText(gn.sha.slice(0,7), s.x + 9, s.y + 3);
+
+        // branch tags (the "branches" part)
+        Object.entries(branches).forEach(([name, sha]) => {
+          if (sha !== gn.sha) return;
+          graphCtx.fillStyle = THEME.accentStrong;
+          graphCtx.fillText(name, s.x + 9, s.y - 8);
+        });
+      });
+    }
+
+    function worldToScreenGraph(wx, wy) {
+      // reuse for hit test on graph
+      const gdpr = (window.devicePixelRatio || 1);
+      const gw = graphEl.width / gdpr;
+      const gh = graphEl.height / gdpr;
+      return {
+        x: wx * 380 * graphView.scale + graphView.tx,
+        y: wy * 180 * graphView.scale + graphView.ty
+      };
+    }
+
+    function hitGraph(sx, sy) {
+      for (const gn of graphNodes) {
+        const s = worldToScreenGraph(gn.wx, gn.wy);
+        if (Math.hypot(s.x - sx, s.y - sy) < 12) return gn;
+      }
+      return null;
+    }
+
+    async function updateCurrentCommit(sha, doTransition = true) {
+      if (!sha) return;
+      currentSha = sha;
+      if (currentCommitEl) currentCommitEl.textContent = sha.slice(0,7);
+
+      // Pipe into control panel + sync spatial file map to this commit's tree
+      const c = commits.find(x => x.sha === sha);
+      if (c && c.treeSha) {
+        try {
+          const treeRes = await fetch(`https://api.github.com/repos/${document.getElementById('repo').value.trim()}/git/trees/${c.treeSha}?recursive=1`);
+          if (treeRes.ok) {
+            const tdata = await treeRes.json();
+            nodes = buildNodesFromTree(tdata.tree || []);
+            fitViewToNodes();
+          }
+        } catch(e) { /* keep previous spatial */ }
+      }
+      if (doTransition) {
+        // visual "transition" feedback
+        setStatus('transition → ' + sha.slice(0,7));
+        setTimeout(() => setStatus(`${nodes.length} items • graph at ${currentSha ? currentSha.slice(0,7) : ''}`), 1400);
+      }
+      scheduleDraw();
+      if (graphCtx) drawGraph();
+    }
+
+    function stepCommit(delta) {
+      if (!commits.length || !currentSha) return;
+      const idx = commits.findIndex(c => c.sha === currentSha);
+      let nextIdx = Math.max(0, Math.min(commits.length-1, idx + delta));
+      updateCurrentCommit(commits[nextIdx].sha, true);
+    }
+
+    function replayHistory() {
+      if (!commits.length) return;
+      let i = 0;
+      const timer = setInterval(() => {
+        if (i >= commits.length) { clearInterval(timer); return; }
+        updateCurrentCommit(commits[i].sha, true);
+        // also advance a branch visually for transition demo
+        if (Object.keys(branches).length) {
+          const bname = Object.keys(branches)[0];
+          branches[bname] = commits[i].sha;
+        }
+        i++;
+        if (graphCtx) drawGraph();
+      }, 420);
+    }
+
+    function simulateCommit() {
+      // Demonstrates "complex git transitions the actual objects undergo"
+      if (!currentSha || !commits.length) return;
+      const parent = currentSha;
+      const newSha = 'sim' + Math.random().toString(16).slice(2, 9);
+      const newTree = 't' + Math.random().toString(16).slice(2, 9);
+
+      // create new commit object
+      const newC = {
+        sha: newSha,
+        parents: [parent],
+        treeSha: newTree,
+        message: 'sim: change ' + (nodes[0] ? nodes[0].name : 'file'),
+        date: new Date().toISOString(),
+        author: 'you'
+      };
+      commits.push(newC);
+
+      // "create" objects in ledger sense + advance branch
+      const bnames = Object.keys(branches);
+      const bname = bnames.length ? bnames[0] : 'main';
+      branches[bname] = newSha;
+      currentSha = newSha;
+
+      buildGraphLayout();
+
+      // pipe transition into spatial map (mock a small change)
+      if (nodes.length) {
+        nodes[0].size = (nodes[0].size || 400) + 120;
+        nodes[0].wx += 0.01;
+      }
+
+      updateCurrentCommit(newSha, true);
+
+      // ledger / object creation feedback (in status + inspector for short text)
+      const ledgerMsg = `created: commit ${newSha.slice(0,7)} • tree ${newTree.slice(0,7)} • branch ${bname} advanced`;
+      setStatus(ledgerMsg);
+      if (insp && !insp.classList.contains('open')) {
+        inspName.textContent = 'Git transition';
+        inspPath.textContent = ledgerMsg;
+        inspMeta.textContent = 'new commit + tree + ref move (real git objects)';
+        insp.classList.add('open');
+      }
+      if (graphCtx) drawGraph();
+    }
+
+    function toggleGraph() {
+      showGraph = !showGraph;
+      if (graphWrap) graphWrap.style.display = showGraph ? 'block' : 'none';
+      if (showGraph) {
+        initGraphCanvas();
+        if (graphCtx) drawGraph();
+      }
+    }
+
     // === RENDER (RAF, culling, LOD) ===
     function worldToScreen(wx, wy) {
       return {
@@ -400,6 +716,7 @@
       rafId = requestAnimationFrame(() => {
         rafId = null;
         if (needsRedraw) draw();
+        if (showGraph && graphCtx) drawGraph();
       });
     }
 
@@ -516,7 +833,7 @@
         scheduleDraw();
       });
 
-      // Buttons
+      // Buttons (existing + new history / graph controls piped to Git model)
       document.getElementById('load').addEventListener('click', () => loadRepo(document.getElementById('repo').value.trim()));
       document.getElementById('demo').addEventListener('click', () => {
         nodes = makeDemoNodes();
@@ -526,7 +843,6 @@
         draw();
       });
       document.getElementById('self').addEventListener('click', () => {
-        // self-demo using the same synthetic structure but labeled as the repo
         nodes = makeDemoNodes().map(n => ({ ...n, path: 'intuitree/' + n.path, id: 'intuitree/' + n.path }));
         fitViewToNodes();
         updateInspector(null);
@@ -542,6 +858,53 @@
           setTimeout(() => { b.textContent = old; }, 900);
         });
       });
+
+      // New Git history controls (piped into control panel + drive graph + spatial)
+      const prevBtn = document.getElementById('prev-commit');
+      const nextBtn = document.getElementById('next-commit');
+      const replayBtn = document.getElementById('replay');
+      const simBtn = document.getElementById('simulate-commit');
+      const togBtn = document.getElementById('toggle-graph');
+      if (prevBtn) prevBtn.addEventListener('click', () => stepCommit(-1));
+      if (nextBtn) nextBtn.addEventListener('click', () => stepCommit(1));
+      if (replayBtn) replayBtn.addEventListener('click', () => replayHistory());
+      if (simBtn) simBtn.addEventListener('click', () => simulateCommit());
+      if (togBtn) togBtn.addEventListener('click', () => toggleGraph());
+
+      // Graph canvas interactions (drag pan + click nodes for selection/transition)
+      if (graphEl) {
+        graphEl.addEventListener('pointerdown', (e) => {
+          graphDragging = true;
+          graphLastX = e.clientX;
+          graphLastY = e.clientY;
+          graphEl.setPointerCapture(e.pointerId);
+        });
+        window.addEventListener('pointermove', (e) => {
+          if (!graphDragging) return;
+          graphView.tx += e.clientX - graphLastX;
+          graphView.ty += e.clientY - graphLastY;
+          graphLastX = e.clientX;
+          graphLastY = e.clientY;
+          if (graphCtx) drawGraph();
+        });
+        window.addEventListener('pointerup', (e) => {
+          if (graphDragging) {
+            graphDragging = false;
+            try { graphEl.releasePointerCapture(e.pointerId); } catch {}
+          }
+        });
+        graphEl.addEventListener('click', (e) => {
+          const rect = graphEl.getBoundingClientRect();
+          const hit = hitGraph(e.clientX - rect.left, e.clientY - rect.top);
+          if (hit) updateCurrentCommit(hit.sha, true);
+        });
+        graphEl.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+          graphView.scale = Math.max(0.4, Math.min(3.5, graphView.scale * f));
+          if (graphCtx) drawGraph();
+        }, {passive:false});
+      }
 
       // Global export list (plain text — dyslexia linear fallback)
       const exportBtn = document.createElement('button');
@@ -571,13 +934,13 @@
       window.addEventListener('resize', () => { resizeCanvas(); scheduleDraw(); });
     }
 
-    // === FETCH + REAL DATA ===
+    // === FETCH + REAL DATA (tree + full git history/DAG for branches/nodes/transitions) ===
     async function loadRepo(repoStr) {
       if (!repoStr) { alert('Enter owner/repo'); return; }
       const [owner, repo] = repoStr.split('/').map(s => s.trim());
       if (!owner || !repo) { alert('Use format owner/repo'); return; }
 
-      setStatus('loading tree…');
+      setStatus('loading tree + history…');
       try {
         const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, {
           headers: { 'Accept': 'application/vnd.github.v3+json' }
@@ -590,17 +953,24 @@
         searchTerm = ''; searchInput.value = '';
         document.getElementById('repo').value = repoStr;
         draw();
-        setStatus(`${nodes.length} items loaded`);
+
+        // Pipe Git objects (commits, branches) into the model + control panel
+        await fetchGitHistory(owner, repo);
+        if (graphWrap && showGraph) {
+          initGraphCanvas();
+          if (graphCtx) drawGraph();
+        }
+        setStatus(`${nodes.length} items • ${commits.length} commits loaded`);
       } catch (err) {
         setStatus('error: ' + err.message);
-        // graceful fallback to demo
         nodes = makeDemoNodes();
         fitViewToNodes();
         draw();
+        // still give demo git history
+        await fetchGitHistory('demo', 'demo');
       }
     }
 
-    // === BOOT ===
     function boot() {
       canvas = canvasEl;
       ctx = canvas.getContext('2d');
@@ -611,30 +981,46 @@
       canvasEl.style.height = '100%';
       resizeCanvas();
 
-      // instant visual — synthetic data
+      // Graph canvas init (for branches + commit nodes + transitions)
+      if (graphEl) {
+        initGraphCanvas();
+        // default hidden; toggle-graph shows it with demo history ready
+      }
+
+      // instant visual — synthetic data (file spatial)
       nodes = makeDemoNodes();
       fitViewToNodes();
       draw();
 
       attachEvents();
 
-      // URL param support (?repo=owner/name)
+      // Give demo git history + graph nodes immediately (branches + commits visible on toggle)
+      // (real loadRepo will overwrite with real data + pipe to control panel)
+      fetchGitHistory('demo', 'demo').then(() => {
+        if (graphCtx && showGraph) drawGraph();
+      });
+
+      // URL param support (?repo=owner/name) — now also loads history/DAG
       const params = new URLSearchParams(location.search);
       const qrepo = params.get('repo');
       if (qrepo) {
         document.getElementById('repo').value = qrepo;
-        // load after a frame so canvas is ready
         requestAnimationFrame(() => loadRepo(qrepo));
       }
 
-      // polite hint
+      // polite hint (short, per dyslexia guidelines)
       setTimeout(() => {
-        if (!searchTerm && !selected) setStatus('try the demo button or load a public repo');
+        if (!searchTerm && !selected) setStatus('toggle graph for branches/nodes • use history bar for transitions');
       }, 2400);
 
-      // expose a couple things for debugging / future
-      window.intuitree = { getNodes: () => nodes, fit: resetView, view };
+      // expose model (now includes git state for control panel / future piping)
+      window.intuitree = { getNodes: () => nodes, fit: resetView, view, getCommits: () => commits, getBranches: () => branches, current: () => currentSha };
     }
+
+    // Extend global resize for graph too (responsive)
+    window.addEventListener('resize', () => {
+      if (graphEl && showGraph) initGraphCanvas();
+    });
 
     boot();
   </script>

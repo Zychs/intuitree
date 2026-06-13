@@ -59,15 +59,18 @@ Drag the map. Scroll to zoom. Click shapes. Type to search. Everything lives in 
 
 - Pure Canvas 2D + RAF. Culling + level-of-detail so thousands of nodes stay responsive.
 - High-DPI handling for crisp text and shapes on retina/zoomed screens.
-- Client-only. Fetches GitHub's public `/git/trees?recursive=1` endpoint (rate limits apply; falls back to demo data).
-- Layout is deterministic clustered scatter — fast, pretty, and still reflects real directory structure.
+- Client-only. Fetches GitHub's public `/git/trees?recursive=1` + `/commits` + `/branches` (rate limits apply; falls back to demo).
+- File spatial map + commit DAG (branches as moving tags, nodes as commits with parent edges). Layout uses simple lane + jitter for spatial feel.
+- History controls (in the bar) drive the model: step/replay/simulate commit. Simulate shows actual object transitions (new commit + tree + branch advance) + ledger text. Selection pipes the commit's tree into the spatial file view.
+- Legend always visible with object symbols (● commit, ◆ merge, ▣ tree, ○ blob, branch tags) and transition notes. All text short + high contrast.
 
-## Roadmap (small)
+## New in this release (branches, nodes, transitions)
 
-- Better subtree-aware sizing for very large repos
-- Optional simple force or treemap toggle (if it stays fast and clear)
-- GitHub Pages one-click hosting
-- Darker high-contrast mode toggle (if needed)
+- Toggle the commit graph panel (top-right) to see the real (or demo) DAG with branches.
+- Use the history bar (prev/next/replay/simulate) — this is the control panel for the Git state.
+- Simulate commit: creates a new commit node, advances a branch, updates the file map, and prints the objects that were "born".
+- Click any commit node in the graph → spatial map jumps to the files at exactly that point in history.
+- Full legend explains every glyph and what a transition actually mutates in git objects.
 
 Open the HTML. Drag the map. See your repo as a living field instead of a list.
 
