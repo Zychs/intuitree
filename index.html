@@ -1,397 +1,642 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>intuitree • intuitive git visualization</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: system-ui, -apple-system, sans-serif; }
-        #viz {
-            border: 1px solid #334155;
-            border-radius: 12px;
-            background: #0f172a;
-            cursor: grab;
-        }
-        #viz:active { cursor: grabbing; }
-        .node { transition: all 0.1s ease; }
-        .tooltip {
-            position: absolute;
-            background: #1e2937;
-            border: 1px solid #475569;
-            color: #e2e8f0;
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            pointer-events: none;
-            z-index: 100;
-            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.3);
-            max-width: 280px;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>intuitree — spatial repo map</title>
+  <style>
+    :root {
+      --bg: #0f0e0a;
+      --bg-soft: #17150d;
+      --text: #f4edcf;
+      --muted: #a99f78;
+      --muted-soft: rgba(169, 159, 120, 0.34);
+      --accent: #c2a334;
+      --accent-strong: #e0be3e;
+      --line: rgba(224, 190, 62, 0.22);
+      --card: #17150d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-rendering: optimizeLegibility; }
+    body { min-height: 100svh; display: flex; flex-direction: column; }
+    header {
+      display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+      background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+    }
+    .brand { font-weight: 800; letter-spacing: .5px; color: var(--accent-strong); font-size: 1.05rem; }
+    .bar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; }
+    input[type="text"] {
+      flex: 1; min-width: 180px; padding: 8px 12px; font-size: 0.95rem; font-weight: 600;
+      background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    }
+    input[type="text"]:focus { border-color: var(--accent); outline: none; }
+    button {
+      padding: 8px 14px; font-size: 0.9rem; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+      background: var(--accent); color: #0f0e0a; border: 0; border-radius: 6px; cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+    button:hover { filter: brightness(1.1); }
+    .hint {
+      font-size: 0.72rem; color: var(--muted); white-space: nowrap; padding: 0 4px;
+    }
+    main { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    .inspector {
+      position: absolute; bottom: 12px; left: 12px; right: 12px; max-width: 420px;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+      font-size: 0.95rem; line-height: 1.35; box-shadow: 0 4px 20px rgba(0,0,0,.35);
+      display: none; z-index: 10;
+    }
+    .inspector.open { display: block; }
+    .inspector .path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88rem; word-break: break-all; color: var(--text); margin: 4px 0 6px; }
+    .inspector .meta { color: var(--muted); font-size: 0.8rem; }
+    .help {
+      position: absolute; top: 10px; right: 12px; font-size: 0.72rem; line-height: 1.3;
+      background: rgba(15,14,10,.7); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; color: var(--muted);
+      pointer-events: none; max-width: 210px; z-index: 5;
+    }
+    .status {
+      position: absolute; bottom: 12px; right: 12px; font-size: 0.7rem; color: var(--muted);
+      background: rgba(15,14,10,.6); padding: 2px 8px; border-radius: 4px; pointer-events: none;
+    }
+    .search {
+      position: absolute; top: 10px; left: 12px; z-index: 10; display: flex; gap: 6px; align-items: center;
+    }
+    .search input {
+      width: 210px; padding: 6px 10px; font-size: 0.9rem; background: var(--bg); color: var(--text);
+      border: 1px solid var(--line); border-radius: 6px;
+    }
+    .search input:focus { border-color: var(--accent); }
+  </style>
 </head>
-<body class="bg-slate-950 text-slate-200">
-    <div class="max-w-[1400px] mx-auto p-6">
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-6">
-            <div class="flex items-center gap-x-3">
-                <div class="w-9 h-9 bg-violet-600 rounded-xl flex items-center justify-center">
-                    <span class="text-white text-2xl font-bold">🌳</span>
-                </div>
-                <div>
-                    <h1 class="text-3xl font-semibold tracking-tight">intuitree</h1>
-                    <p class="text-slate-400 text-sm -mt-1">intuitive spatial git visualization</p>
-                </div>
-            </div>
-            <div class="flex items-center gap-x-2 text-sm">
-                <div class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center gap-x-2">
-                    <div class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                    <span class="text-emerald-400">v0 — interactive canvas</span>
-                </div>
-                <button onclick="resetView()" 
-                        class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm flex items-center gap-x-2 transition-colors">
-                    <span>Reset View</span>
-                </button>
-            </div>
-        </div>
+<body>
+  <header>
+    <div class="brand">intuitree</div>
+    <div class="bar">
+      <input id="repo" type="text" placeholder="owner/repo (e.g. octocat/Hello-World)" value="octocat/Hello-World">
+      <button id="load">Load</button>
+      <button id="demo" class="secondary">Demo data</button>
+      <button id="self" class="secondary">This repo (demo)</button>
+    </div>
+    <div class="hint">drag • scroll/± • click • type to search • r reset</div>
+  </header>
 
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <!-- Controls -->
-            <div class="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-2xl p-5 h-fit">
-                <h3 class="font-semibold mb-4 flex items-center gap-x-2">
-                    <span>Controls</span>
-                </h3>
-                
-                <div class="space-y-4">
-                    <div>
-                        <label class="text-xs text-slate-400 block mb-1.5">Color by</label>
-                        <select id="colorMode" onchange="redraw()" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-                            <option value="extension">File Extension</option>
-                            <option value="type">File vs Directory</option>
-                        </select>
-                    </div>
+  <main>
+    <canvas id="map" width="800" height="600"></canvas>
 
-                    <div>
-                        <label class="text-xs text-slate-400 block mb-1.5">Zoom</label>
-                        <input type="range" id="zoomSlider" min="0.3" max="4" step="0.1" value="1" 
-                               oninput="setZoom(this.value)" class="w-full accent-violet-600">
-                        <div class="flex justify-between text-[10px] text-slate-500 mt-1">
-                            <div>0.3x</div><div id="zoomValue">1.0x</div><div>4x</div>
-                        </div>
-                    </div>
-
-                    <div class="pt-2 border-t border-slate-800">
-                        <div class="text-xs text-slate-400 mb-2">Legend (extension colors)</div>
-                        <div id="legend" class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs"></div>
-                    </div>
-
-                    <button onclick="loadMockData()" 
-                            class="w-full mt-2 py-2.5 bg-violet-600 hover:bg-violet-700 active:bg-violet-800 rounded-xl text-sm font-medium transition-colors">
-                        Reload Mock Tree
-                    </button>
-                </div>
-            </div>
-
-            <!-- Canvas -->
-            <div class="lg:col-span-9 relative">
-                <canvas id="viz" width="980" height="620" class="w-full shadow-2xl"></canvas>
-                <div id="tooltip" class="tooltip hidden"></div>
-                
-                <div class="absolute bottom-4 right-4 bg-slate-900/90 border border-slate-700 text-[10px] px-3 py-1.5 rounded-lg text-slate-400">
-                    Drag to pan • Scroll to zoom • Hover nodes
-                </div>
-            </div>
-        </div>
-
-        <div class="mt-6 text-xs text-slate-500 flex items-center gap-x-4">
-            <div>Built with Grok Build/Compose • Staged via T:\compose-staging\</div>
-            <div class="flex-1 h-px bg-slate-800"></div>
-            <div>Owner: Zychs • <a href="https://github.com/Zychs/intuitree" class="hover:text-slate-300">github.com/Zychs/intuitree</a></div>
-        </div>
+    <div class="search">
+      <input id="search" type="text" placeholder="search files (e.g. main or .js)">
     </div>
 
-    <script>
-        const canvas = document.getElementById('viz');
-        const ctx = canvas.getContext('2d');
-        const tooltip = document.getElementById('tooltip');
+    <div id="inspector" class="inspector">
+      <div id="insp-name" style="font-weight:700; font-size:1.02rem;"></div>
+      <div id="insp-path" class="path"></div>
+      <div id="insp-meta" class="meta"></div>
+      <div style="margin-top:8px;">
+        <button id="close-insp" class="secondary" style="padding:4px 10px; font-size:0.72rem;">close</button>
+        <button id="export-one" class="secondary" style="padding:4px 10px; font-size:0.72rem; margin-left:6px;">copy path</button>
+      </div>
+    </div>
 
-        let scale = 1;
-        let offsetX = 0;
-        let offsetY = 0;
-        let isDragging = false;
-        let lastX = 0;
-        let lastY = 0;
-        let nodes = [];
-        let hoveredNode = null;
+    <div class="help">
+      <strong>how to explore</strong><br>
+      • drag the map to pan<br>
+      • scroll or +/– to zoom (centered)<br>
+      • click any shape to inspect<br>
+      • type in the search box<br>
+      • press <strong>r</strong> to reset view
+    </div>
 
-        // Extension color map (customizable)
-        const extColors = {
-            '.js': '#f1e05a',
-            '.ts': '#3178c6',
-            '.py': '#3572A5',
-            '.md': '#6b7280',
-            '.json': '#854d0e',
-            '.html': '#e34c26',
-            '.css': '#264de4',
-            '.sh': '#89e051',
-            '.go': '#00ADD8',
-            '.rs': '#dea584',
-            'dir': '#8b5cf6',
-            'default': '#64748b'
-        };
+    <div id="status" class="status"></div>
+  </main>
 
-        // Mock git-style file tree (v0)
-        function getMockTree() {
-            return {
-                name: 'root',
-                type: 'dir',
-                path: '',
-                children: [
-                    { name: 'src', type: 'dir', path: 'src', children: [
-                        { name: 'main.js', type: 'file', path: 'src/main.js', ext: '.js', size: 1240 },
-                        { name: 'utils.ts', type: 'file', path: 'src/utils.ts', ext: '.ts', size: 890 },
-                        { name: 'components', type: 'dir', path: 'src/components', children: [
-                            { name: 'Button.tsx', type: 'file', path: 'src/components/Button.tsx', ext: '.ts', size: 2100 },
-                            { name: 'Modal.tsx', type: 'file', path: 'src/components/Modal.tsx', ext: '.ts', size: 1850 }
-                        ]}
-                    ]},
-                    { name: 'README.md', type: 'file', path: 'README.md', ext: '.md', size: 3200 },
-                    { name: 'package.json', type: 'file', path: 'package.json', ext: '.json', size: 680 },
-                    { name: 'scripts', type: 'dir', path: 'scripts', children: [
-                        { name: 'build.sh', type: 'file', path: 'scripts/build.sh', ext: '.sh', size: 420 }
-                    ]},
-                    { name: 'docs', type: 'dir', path: 'docs', children: [
-                        { name: 'architecture.md', type: 'file', path: 'docs/architecture.md', ext: '.md', size: 15400 }
-                    ]}
-                ]
-            };
-        }
+  <script>
+    // === CONFIG & THEME (warm dark, high contrast, chordinator-inspired) ===
+    const THEME = {
+      bg: '#0f0e0a',
+      text: '#f4edcf',
+      muted: '#a99f78',
+      accent: '#c2a334',
+      accentStrong: '#e0be3e',
+      line: 'rgba(224,190,62,0.22)',
+      card: '#17150d'
+    };
 
-        function flattenTree(node, depth = 0, x = 400, yBase = 80) {
-            const flat = [];
-            const y = yBase + depth * 78;
-            
-            flat.push({
-                ...node,
-                x: x,
-                y: y,
-                depth: depth,
-                width: node.type === 'dir' ? 160 : 140,
-                height: 32
-            });
+    // Category colors (redundant with shape/stroke + labels)
+    const CAT_COLOR = {
+      code: '#e8c55c',   // warm gold
+      doc: '#d9c9a3',    // soft warm
+      config: '#8fa3b8', // cool muted
+      asset: '#a88bc4',  // purple-ish
+      other: '#8fa88f'   // green-gray
+    };
 
-            if (node.children) {
-                const childStartX = x - (node.children.length - 1) * 95;
-                node.children.forEach((child, i) => {
-                    const childX = childStartX + i * 190;
-                    flat.push(...flattenTree(child, depth + 1, childX, yBase));
-                });
-            }
-            return flat;
-        }
+    function catForExt(ext) {
+      ext = (ext || '').toLowerCase();
+      if (['js','ts','tsx','jsx','py','rb','go','rs','zig','c','cpp','java','cs'].includes(ext)) return 'code';
+      if (['md','txt','rst','adoc'].includes(ext)) return 'doc';
+      if (['json','yaml','yml','toml','ini','cfg','xml','env'].includes(ext)) return 'config';
+      if (['png','jpg','jpeg','gif','svg','webp','ico','mp3','wav','mp4'].includes(ext)) return 'asset';
+      return 'other';
+    }
 
-        function draw() {
-            ctx.save();
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.translate(offsetX, offsetY);
-            ctx.scale(scale, scale);
+    // === STATE ===
+    let nodes = [];           // {id, path, name, ext, size, cat, wx, wy, wr, isDir}
+    let view = { tx: 0, ty: 0, scale: 1 };
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    let selected = null;
+    let searchTerm = '';
+    let rafId = null;
+    let needsRedraw = true;
+    let canvas, ctx, dpr = 1;
 
-            // Draw connections first
-            ctx.strokeStyle = '#475569';
-            ctx.lineWidth = 1.5;
-            
-            for (let i = 0; i < nodes.length; i++) {
-                const node = nodes[i];
-                if (node.children) {
-                    node.children.forEach(child => {
-                        const childNode = nodes.find(n => n.path === child.path);
-                        if (childNode) {
-                            ctx.beginPath();
-                            ctx.moveTo(node.x + node.width/2, node.y + node.height/2);
-                            ctx.lineTo(childNode.x + childNode.width/2, childNode.y + childNode.height/2);
-                            ctx.stroke();
-                        }
-                    });
-                }
-            }
+    const canvasEl = document.getElementById('map');
+    const insp = document.getElementById('inspector');
+    const inspName = document.getElementById('insp-name');
+    const inspPath = document.getElementById('insp-path');
+    const inspMeta = document.getElementById('insp-meta');
+    const statusEl = document.getElementById('status');
+    const searchInput = document.getElementById('search');
 
-            // Draw nodes
-            const colorMode = document.getElementById('colorMode').value;
-            
-            nodes.forEach(node => {
-                const isDir = node.type === 'dir';
-                let color = extColors['default'];
-                
-                if (colorMode === 'extension') {
-                    color = isDir ? extColors['dir'] : (extColors[node.ext] || extColors['default']);
-                } else {
-                    color = isDir ? extColors['dir'] : '#64748b';
-                }
+    function setStatus(msg) { statusEl.textContent = msg; }
 
-                // Node background
-                ctx.fillStyle = color;
-                ctx.strokeStyle = '#1e2937';
-                ctx.lineWidth = 2;
-                
-                const radius = isDir ? 8 : 6;
-                ctx.beginPath();
-                ctx.roundRect(node.x, node.y, node.width, node.height, radius);
-                ctx.fill();
-                ctx.stroke();
+    // === HIGH-DPI + RESIZE (responsive) ===
+    function resizeCanvas() {
+      const rect = canvasEl.getBoundingClientRect();
+      dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      canvasEl.width = Math.floor(rect.width * dpr);
+      canvasEl.height = Math.floor(rect.height * dpr);
+      canvasEl.style.width = rect.width + 'px';
+      canvasEl.style.height = rect.height + 'px';
+      ctx = canvasEl.getContext('2d', { alpha: true });
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px
+      needsRedraw = true;
+    }
 
-                // Label
-                ctx.fillStyle = '#f8fafc';
-                ctx.font = isDir ? '600 13px system-ui' : '13px system-ui';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                const label = node.name.length > 18 ? node.name.slice(0, 15) + '...' : node.name;
-                ctx.fillText(label, node.x + node.width/2, node.y + node.height/2);
-            });
+    function fitViewToNodes() {
+      if (!nodes.length) { view = { tx: 0, ty: 0, scale: 1 }; return; }
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of nodes) {
+        const r = n.wr || 0.02;
+        minX = Math.min(minX, n.wx - r);
+        minY = Math.min(minY, n.wy - r);
+        maxX = Math.max(maxX, n.wx + r);
+        maxY = Math.max(maxY, n.wy + r);
+      }
+      const pad = 0.08;
+      const w = Math.max(0.01, maxX - minX + pad * 2);
+      const h = Math.max(0.01, maxY - minY + pad * 2);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
 
-            ctx.restore();
-        }
+      const rect = canvasEl.getBoundingClientRect();
+      const availW = rect.width || 800;
+      const availH = rect.height || 600;
+      const s = Math.min(availW / (w * 1.1), availH / (h * 1.1));
+      view.scale = Math.max(0.2, Math.min(18, s));
+      view.tx = availW * 0.5 - cx * view.scale;
+      view.ty = availH * 0.5 - cy * view.scale;
+      needsRedraw = true;
+    }
 
-        function redraw() {
-            draw();
-        }
+    // === LAYOUT (simple clustered spatial distribution — deterministic jitter) ===
+    function hashStr(s) {
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0) / 4294967296;
+    }
 
-        function updateLegend() {
-            const legend = document.getElementById('legend');
-            legend.innerHTML = '';
-            Object.entries(extColors).forEach(([ext, color]) => {
-                if (ext === 'default') return;
-                const div = document.createElement('div');
-                div.className = 'flex items-center gap-x-2';
-                div.innerHTML = `
-                    <div class="w-3 h-3 rounded" style="background: ${color}"></div>
-                    <span class="text-slate-400">${ext}</span>
-                `;
-                legend.appendChild(div);
-            });
-        }
+    function buildNodesFromTree(treeItems) {
+      // treeItems: array from GitHub {path, type, size?}
+      const out = [];
+      const dirCenters = new Map(); // top-level dir -> {x,y}
 
-        function setZoom(value) {
-            scale = parseFloat(value);
-            document.getElementById('zoomValue').textContent = scale.toFixed(1) + 'x';
-            draw();
-        }
+      // top-level provinces (rough 3x3-ish grid for organic feel)
+      function topCenter(name) {
+        if (dirCenters.has(name)) return dirCenters.get(name);
+        const h = hashStr(name);
+        const col = Math.floor(h * 3);
+        const row = Math.floor((h * 7) % 3);
+        const cx = 0.15 + col * 0.28 + (hashStr(name + 'x') - 0.5) * 0.06;
+        const cy = 0.18 + row * 0.26 + (hashStr(name + 'y') - 0.5) * 0.05;
+        const c = { x: Math.max(0.08, Math.min(0.92, cx)), y: Math.max(0.1, Math.min(0.9, cy)) };
+        dirCenters.set(name, c);
+        return c;
+      }
 
-        function resetView() {
-            scale = 1;
-            offsetX = 40;
-            offsetY = 20;
-            document.getElementById('zoomSlider').value = 1;
-            document.getElementById('zoomValue').textContent = '1.0x';
-            draw();
-        }
+      for (const item of treeItems) {
+        if (item.type !== 'blob' && item.type !== 'tree') continue;
+        const parts = item.path.split('/');
+        const name = parts[parts.length - 1];
+        const ext = name.includes('.') ? name.split('.').pop() : '';
+        const isDir = item.type === 'tree';
+        const size = item.size || (isDir ? 0 : 120 + Math.floor(hashStr(item.path) * 2400));
 
-        function loadMockData() {
-            const tree = getMockTree();
-            nodes = flattenTree(tree);
-            offsetX = 40;
-            offsetY = 20;
-            scale = 1;
-            document.getElementById('zoomSlider').value = 1;
-            draw();
-            updateLegend();
-        }
+        let top = parts[0] || 'root';
+        const center = topCenter(top);
 
-        // Mouse interaction
-        canvas.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            lastX = e.clientX;
-            lastY = e.clientY;
+        // inner offset within province (deterministic jitter)
+        const h = hashStr(item.path + 'j');
+        const jr = isDir ? 0.045 : 0.028;
+        const jx = (h - 0.5) * jr * 1.6;
+        const jy = (hashStr(item.path + 'k') - 0.5) * jr * 1.35;
+
+        const wx = center.x + jx;
+        const wy = center.y + jy;
+
+        // radius: larger files bigger, dirs medium
+        let wr = isDir ? 0.018 : Math.max(0.006, Math.sqrt(Math.max(40, size)) * 0.0018);
+        if (isDir) wr = 0.022;
+
+        out.push({
+          id: item.path,
+          path: item.path,
+          name,
+          ext,
+          size,
+          cat: catForExt(ext),
+          wx, wy, wr,
+          isDir
         });
+      }
 
-        window.addEventListener('mouseup', () => isDragging = false);
+      // sort: dirs first then small-to-large for draw order
+      out.sort((a, b) => (a.isDir === b.isDir ? a.size - b.size : a.isDir ? -1 : 1));
+      return out;
+    }
 
-        window.addEventListener('mousemove', (e) => {
-            if (!isDragging) {
-                // Hover detection
-                const rect = canvas.getBoundingClientRect();
-                const mouseX = (e.clientX - rect.left - offsetX) / scale;
-                const mouseY = (e.clientY - rect.top - offsetY) / scale;
+    // Synthetic demo tree (instant, no network)
+    function makeDemoNodes() {
+      const demo = [
+        { path: 'src', type: 'tree', size: 0 },
+        { path: 'src/main.js', type: 'blob', size: 1840 },
+        { path: 'src/canvas.js', type: 'blob', size: 620 },
+        { path: 'src/layout.js', type: 'blob', size: 410 },
+        { path: 'src/utils.js', type: 'blob', size: 290 },
+        { path: 'README.md', type: 'blob', size: 1240 },
+        { path: 'package.json', type: 'blob', size: 380 },
+        { path: 'docs', type: 'tree', size: 0 },
+        { path: 'docs/guide.md', type: 'blob', size: 780 },
+        { path: 'docs/examples', type: 'tree', size: 0 },
+        { path: 'docs/examples/basic.html', type: 'blob', size: 2100 },
+        { path: 'assets', type: 'tree', size: 0 },
+        { path: 'assets/logo.svg', type: 'blob', size: 540 },
+        { path: 'assets/icon.png', type: 'blob', size: 3120 },
+        { path: '.github', type: 'tree', size: 0 },
+        { path: '.github/workflows/ci.yml', type: 'blob', size: 320 },
+      ];
+      return buildNodesFromTree(demo);
+    }
 
-                hoveredNode = null;
-                for (const node of nodes) {
-                    if (mouseX > node.x && mouseX < node.x + node.width &&
-                        mouseY > node.y && mouseY < node.y + node.height) {
-                        hoveredNode = node;
-                        break;
-                    }
-                }
+    // === RENDER (RAF, culling, LOD) ===
+    function worldToScreen(wx, wy) {
+      return {
+        x: wx * view.scale + view.tx,
+        y: wy * view.scale + view.ty
+      };
+    }
 
-                if (hoveredNode) {
-                    tooltip.style.left = `${e.clientX + 15}px`;
-                    tooltip.style.top = `${e.clientY + 15}px`;
-                    tooltip.innerHTML = `
-                        <div class="font-medium">${hoveredNode.name}</div>
-                        <div class="text-emerald-400 text-xs">${hoveredNode.path}</div>
-                        ${hoveredNode.size ? `<div class="text-xs text-slate-400 mt-0.5">${(hoveredNode.size/1024).toFixed(1)} KB</div>` : ''}
-                        <div class="text-[10px] text-slate-500 mt-1">${hoveredNode.type === 'dir' ? 'Directory' : 'File'} • Click to focus</div>
-                    `;
-                    tooltip.classList.remove('hidden');
-                } else {
-                    tooltip.classList.add('hidden');
-                }
-                return;
-            }
+    function draw() {
+      if (!ctx) return;
+      const w = canvasEl.width / dpr;
+      const h = canvasEl.height / dpr;
 
-            const dx = e.clientX - lastX;
-            const dy = e.clientY - lastY;
-            offsetX += dx;
-            offsetY += dy;
-            lastX = e.clientX;
-            lastY = e.clientY;
-            draw();
-        });
+      ctx.fillStyle = THEME.bg;
+      ctx.fillRect(0, 0, w, h);
 
-        canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
+      // very soft background provinces (visual "spatial distribution")
+      ctx.globalAlpha = 0.12;
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = THEME.accent;
+        ctx.beginPath();
+        ctx.arc(180 + i * 210, 220 + (i % 2) * 90, 140 + i * 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
 
-            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-            const newScale = Math.max(0.3, Math.min(4, scale * zoomFactor));
+      const minScreenR = 1.6;
+      const labelThreshold = 7.5;
 
-            // Zoom toward mouse
-            offsetX = mouseX - (mouseX - offsetX) * (newScale / scale);
-            offsetY = mouseY - (mouseY - offsetY) * (newScale / scale);
-            scale = newScale;
+      let drawn = 0, labels = 0;
 
-            document.getElementById('zoomSlider').value = scale;
-            document.getElementById('zoomValue').textContent = scale.toFixed(1) + 'x';
-            draw();
-        });
+      for (const n of nodes) {
+        const s = worldToScreen(n.wx, n.wy);
+        const sr = (n.wr || 0.015) * view.scale;
 
-        // Keyboard
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'r' || e.key === 'R') resetView();
-        });
+        if (sr < minScreenR) continue; // culling
 
-        // Init
-        function init() {
-            loadMockData();
-            resetView();
-            
-            // Initial legend
-            setTimeout(() => {
-                updateLegend();
-            }, 50);
+        // frustum cull
+        if (s.x < -sr * 2 || s.x > w + sr * 2 || s.y < -sr * 2 || s.y > h + sr * 2) continue;
 
-            // Bonus: click to "select" node (future: open file)
-            canvas.addEventListener('click', () => {
-                if (hoveredNode) {
-                    console.log('Selected:', hoveredNode);
-                    // Future: highlight subtree or load real content
-                }
-            });
+        const isMatch = searchTerm && n.path.toLowerCase().includes(searchTerm);
+        const isSel = selected && selected.id === n.id;
 
-            console.log('%c[intuitree] v0 canvas ready — Grok Build/Compose scaffold complete', 'color:#64748b');
+        // province soft fill for dirs (extra spatial cue)
+        if (n.isDir) {
+          ctx.fillStyle = 'rgba(194,163,52,0.06)';
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, sr * 1.9, 0, Math.PI * 2);
+          ctx.fill();
         }
 
-        window.onload = init;
-    </script>
+        // main shape
+        ctx.strokeStyle = isSel || isMatch ? THEME.accentStrong : THEME.line;
+        ctx.lineWidth = isSel ? 2.2 : (isMatch ? 1.8 : 1.1);
+        ctx.fillStyle = CAT_COLOR[n.cat] || THEME.text;
+
+        ctx.beginPath();
+        if (n.isDir) {
+          ctx.rect(s.x - sr * 0.9, s.y - sr * 0.9, sr * 1.8, sr * 1.8);
+        } else {
+          ctx.arc(s.x, s.y, sr, 0, Math.PI * 2);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        // highlight ring for search/selection (redundant encoding)
+        if (isMatch || isSel) {
+          ctx.strokeStyle = isSel ? THEME.accentStrong : THEME.accent;
+          ctx.lineWidth = isSel ? 3 : 2.2;
+          ctx.beginPath();
+          if (n.isDir) {
+            ctx.rect(s.x - sr * 1.15, s.y - sr * 1.15, sr * 2.3, sr * 2.3);
+          } else {
+            ctx.arc(s.x, s.y, sr * 1.35, 0, Math.PI * 2);
+          }
+          ctx.stroke();
+        }
+
+        // label (LOD)
+        if (sr > labelThreshold && n.name.length < 28) {
+          ctx.fillStyle = THEME.text;
+          ctx.font = (n.isDir ? '600 ' : '500 ') + '11.5px/1 Inter, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const label = n.name.length > 18 ? n.name.slice(0, 15) + '…' : n.name;
+          ctx.fillText(label, s.x, s.y + sr + 11);
+          labels++;
+        }
+        drawn++;
+      }
+
+      // subtle status
+      if (searchTerm) {
+        const matches = nodes.filter(n => n.path.toLowerCase().includes(searchTerm)).length;
+        setStatus(`${matches} match${matches === 1 ? '' : 'es'} • ${drawn} visible`);
+      } else {
+        setStatus(`${nodes.length} items • ${drawn} drawn`);
+      }
+
+      needsRedraw = false;
+    }
+
+    function scheduleDraw() {
+      needsRedraw = true;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (needsRedraw) draw();
+      });
+    }
+
+    // === INTERACTION (highly responsive, direct) ===
+    function screenToWorld(sx, sy) {
+      return {
+        wx: (sx - view.tx) / view.scale,
+        wy: (sy - view.ty) / view.scale
+      };
+    }
+
+    function hitTest(sx, sy) {
+      const { wx, wy } = screenToWorld(sx, sy);
+      let best = null;
+      let bestDist = Infinity;
+      for (const n of nodes) {
+        const dx = n.wx - wx;
+        const dy = n.wy - wy;
+        const dist = Math.hypot(dx, dy);
+        const r = (n.wr || 0.015) * 1.6; // generous hit for dyslexia (large targets)
+        if (dist < r && dist < bestDist) {
+          bestDist = dist;
+          best = n;
+        }
+      }
+      return best;
+    }
+
+    function updateInspector(n) {
+      selected = n;
+      if (!n) {
+        insp.classList.remove('open');
+        return;
+      }
+      inspName.textContent = n.name + (n.isDir ? ' /' : '');
+      inspPath.textContent = n.path;
+      const kb = n.size >= 1024 ? (n.size / 1024).toFixed(1) + ' KB' : n.size + ' B';
+      inspMeta.textContent = `${kb} • ${n.cat} • ${n.isDir ? 'directory' : 'file'} • click map or press Esc to close`;
+      insp.classList.add('open');
+      needsRedraw = true;
+      draw();
+    }
+
+    function resetView() {
+      fitViewToNodes();
+      draw();
+    }
+
+    function zoomAt(clientX, clientY, factor) {
+      const rect = canvasEl.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+
+      const before = screenToWorld(cx, cy);
+      view.scale = Math.max(0.15, Math.min(42, view.scale * factor));
+      const after = screenToWorld(cx, cy);
+
+      view.tx += (after.wx - before.wx) * view.scale;
+      view.ty += (after.wy - before.wy) * view.scale;
+      scheduleDraw();
+    }
+
+    function attachEvents() {
+      // Pointer drag (mouse + touch unified)
+      canvasEl.addEventListener('pointerdown', (e) => {
+        isDragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        canvasEl.setPointerCapture(e.pointerId);
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        view.tx += dx;
+        view.ty += dy;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        scheduleDraw();
+      });
+      window.addEventListener('pointerup', (e) => {
+        if (isDragging) {
+          isDragging = false;
+          try { canvasEl.releasePointerCapture(e.pointerId); } catch {}
+        }
+      });
+
+      // Wheel zoom (centered)
+      canvasEl.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+        zoomAt(e.clientX, e.clientY, factor);
+      }, { passive: false });
+
+      // Click / tap inspect
+      canvasEl.addEventListener('click', (e) => {
+        const rect = canvasEl.getBoundingClientRect();
+        const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+        updateInspector(hit);
+      });
+
+      // Keyboard (minimal, discoverable)
+      window.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 'r') { resetView(); }
+        if (e.key === '/') { e.preventDefault(); searchInput.focus(); searchInput.select(); }
+        if (e.key === 'Escape') { updateInspector(null); searchInput.value = ''; searchTerm = ''; scheduleDraw(); }
+        if (e.key === '+' || e.key === '=') { zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.22); }
+        if (e.key === '-') { zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.22); }
+      });
+
+      // Search (live, forgiving)
+      searchInput.addEventListener('input', () => {
+        searchTerm = searchInput.value.trim().toLowerCase();
+        scheduleDraw();
+      });
+
+      // Buttons
+      document.getElementById('load').addEventListener('click', () => loadRepo(document.getElementById('repo').value.trim()));
+      document.getElementById('demo').addEventListener('click', () => {
+        nodes = makeDemoNodes();
+        fitViewToNodes();
+        updateInspector(null);
+        searchTerm = ''; searchInput.value = '';
+        draw();
+      });
+      document.getElementById('self').addEventListener('click', () => {
+        // self-demo using the same synthetic structure but labeled as the repo
+        nodes = makeDemoNodes().map(n => ({ ...n, path: 'intuitree/' + n.path, id: 'intuitree/' + n.path }));
+        fitViewToNodes();
+        updateInspector(null);
+        draw();
+      });
+      document.getElementById('close-insp').addEventListener('click', () => updateInspector(null));
+      document.getElementById('export-one').addEventListener('click', () => {
+        if (!selected) return;
+        navigator.clipboard.writeText(selected.path).then(() => {
+          const b = document.getElementById('export-one');
+          const old = b.textContent;
+          b.textContent = 'copied';
+          setTimeout(() => { b.textContent = old; }, 900);
+        });
+      });
+
+      // Global export list (plain text — dyslexia linear fallback)
+      const exportBtn = document.createElement('button');
+      exportBtn.className = 'secondary';
+      exportBtn.style.cssText = 'position:absolute; bottom:12px; left:50%; transform:translateX(-50%); padding:5px 11px; font-size:0.7rem; z-index:12;';
+      exportBtn.textContent = 'export list (plain)';
+      exportBtn.onclick = () => {
+        if (!nodes.length) return;
+        const lines = nodes
+          .sort((a, b) => a.path.localeCompare(b.path))
+          .map(n => (n.isDir ? '📁 ' : '  ') + n.path + (n.size ? `  (${Math.round(n.size / 1024 * 10) / 10} KB)` : ''));
+        const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'repo-list.txt';
+        a.click();
+      };
+      document.querySelector('main').appendChild(exportBtn);
+
+      // Resize
+      const ro = new ResizeObserver(() => {
+        resizeCanvas();
+        if (nodes.length) fitViewToNodes(); // keep overview nice
+        scheduleDraw();
+      });
+      ro.observe(canvasEl);
+      window.addEventListener('resize', () => { resizeCanvas(); scheduleDraw(); });
+    }
+
+    // === FETCH + REAL DATA ===
+    async function loadRepo(repoStr) {
+      if (!repoStr) { alert('Enter owner/repo'); return; }
+      const [owner, repo] = repoStr.split('/').map(s => s.trim());
+      if (!owner || !repo) { alert('Use format owner/repo'); return; }
+
+      setStatus('loading tree…');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, {
+          headers: { 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (!res.ok) throw new Error(res.status === 403 ? 'rate limited — try again soon' : 'fetch failed');
+        const data = await res.json();
+        nodes = buildNodesFromTree(data.tree || []);
+        fitViewToNodes();
+        updateInspector(null);
+        searchTerm = ''; searchInput.value = '';
+        document.getElementById('repo').value = repoStr;
+        draw();
+        setStatus(`${nodes.length} items loaded`);
+      } catch (err) {
+        setStatus('error: ' + err.message);
+        // graceful fallback to demo
+        nodes = makeDemoNodes();
+        fitViewToNodes();
+        draw();
+      }
+    }
+
+    // === BOOT ===
+    function boot() {
+      canvas = canvasEl;
+      ctx = canvas.getContext('2d');
+
+      // initial size
+      const container = canvas.parentElement;
+      canvasEl.style.width = '100%';
+      canvasEl.style.height = '100%';
+      resizeCanvas();
+
+      // instant visual — synthetic data
+      nodes = makeDemoNodes();
+      fitViewToNodes();
+      draw();
+
+      attachEvents();
+
+      // URL param support (?repo=owner/name)
+      const params = new URLSearchParams(location.search);
+      const qrepo = params.get('repo');
+      if (qrepo) {
+        document.getElementById('repo').value = qrepo;
+        // load after a frame so canvas is ready
+        requestAnimationFrame(() => loadRepo(qrepo));
+      }
+
+      // polite hint
+      setTimeout(() => {
+        if (!searchTerm && !selected) setStatus('try the demo button or load a public repo');
+      }, 2400);
+
+      // expose a couple things for debugging / future
+      window.intuitree = { getNodes: () => nodes, fit: resetView, view };
+    }
+
+    boot();
+  </script>
 </body>
 </html>
